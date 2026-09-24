@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # e2e tests derive "expert-listing-test" from this and create it themselves.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/expert-listing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # The Ubuntu runner ships PostgreSQL 16 (stopped). Add PostGIS and start it.
+      - name: Start PostgreSQL with PostGIS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-16-postgis-3
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres'"
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:e2e
+
+      - name: Migrations round-trip (down, then up again)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/expert-listing-test
+        run: |
+          npm run typeorm -- migration:revert
+          npm run typeorm -- migration:revert
+          npm run typeorm -- migration:run
